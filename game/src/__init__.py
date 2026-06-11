@@ -1,0 +1,1 @@
+"""Slasher Survivors game client."""
