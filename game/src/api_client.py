@@ -28,10 +28,60 @@ class ApiClient:
         # Backend connectivity telemetry, updated by get_leaderboard().
         self.last_rtt_ms: Optional[float] = None  # round-trip time, ms
         self.online: bool = False
+        # Auth state (set by log_in). nickname comes from the account.
+        self.id_token: Optional[str] = None
+        self.nickname: Optional[str] = None
+
+    @property
+    def logged_in(self) -> bool:
+        return self.id_token is not None
+
+    def _auth_headers(self) -> dict:
+        return {"Authorization": f"Bearer {self.id_token}"} if self.id_token else {}
 
     def backend_info(self) -> dict:
         """Snapshot of backend connectivity for the UI."""
         return {"url": self.base_url, "online": self.online, "rtt_ms": self.last_rtt_ms}
+
+    # ------------------------------------------------------------------ #
+    # Auth (synchronous — called from the login/signup screens)
+    # ------------------------------------------------------------------ #
+    def sign_up(self, email: str, password: str, nickname: str) -> tuple[bool, str]:
+        """Register an account. Returns (ok, message)."""
+        try:
+            resp = requests.post(f"{self.base_url}/auth/signup", timeout=self.timeout,
+                                 json={"email": email, "password": password,
+                                       "nickname": nickname})
+            if resp.status_code < 400:
+                return True, "Account created — please log in."
+            return False, self._error_detail(resp, "Sign up failed")
+        except requests.RequestException:
+            return False, "Cannot reach server."
+
+    def log_in(self, email: str, password: str) -> tuple[bool, str]:
+        """Authenticate and store the ID token + nickname. Returns (ok, message)."""
+        try:
+            resp = requests.post(f"{self.base_url}/auth/login", timeout=self.timeout,
+                                 json={"email": email, "password": password})
+            if resp.status_code < 400:
+                data = resp.json()
+                self.id_token = data.get("id_token")
+                self.nickname = data.get("nickname")
+                return True, f"Welcome, {self.nickname}!"
+            return False, self._error_detail(resp, "Login failed")
+        except (requests.RequestException, ValueError):
+            return False, "Cannot reach server."
+
+    def log_out(self) -> None:
+        self.id_token = None
+        self.nickname = None
+
+    @staticmethod
+    def _error_detail(resp, default: str) -> str:
+        try:
+            return str(resp.json().get("detail", default))
+        except ValueError:
+            return default
 
     # ------------------------------------------------------------------ #
     # Writes
@@ -52,9 +102,11 @@ class ApiClient:
         return thread
 
     def _post_score(self, nickname: str, result: dict) -> bool:
-        payload = {"nickname": nickname, **result}
+        # The nickname is derived from the auth token server-side; we send only
+        # the run result plus the Bearer token.
         try:
-            resp = requests.post(f"{self.base_url}/scores", json=payload, timeout=self.timeout)
+            resp = requests.post(f"{self.base_url}/scores", json=dict(result),
+                                 headers=self._auth_headers(), timeout=self.timeout)
             return resp.status_code < 400
         except requests.RequestException:
             return False

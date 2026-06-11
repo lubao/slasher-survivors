@@ -14,9 +14,11 @@ from functools import lru_cache
 from fastapi import Depends, FastAPI, Query
 
 from . import config
+from .auth import get_current_user, log_in, sign_up
 from .db import Repository
-from .models import (AchievementsResponse, LeaderboardResponse, ScoreResponse,
-                     ScoreSubmission)
+from .models import (AchievementsResponse, AuthTokens, LeaderboardResponse,
+                     LoginRequest, ScoreResponse, ScoreSubmission,
+                     SignupRequest, SignupResponse)
 
 logger = logging.getLogger("slasher.events")
 if not logger.handlers:
@@ -40,10 +42,10 @@ def get_repository() -> Repository:
     return repo
 
 
-def log_game_over(submission: ScoreSubmission, result: dict) -> None:
+def log_game_over(nickname: str, submission: ScoreSubmission, result: dict) -> None:
     logger.info(json.dumps({
         "event": "game_over",
-        "nickname": submission.nickname,
+        "nickname": nickname,
         "score": submission.score,
         "kills": submission.kills,
         "survival_seconds": submission.survival_seconds,
@@ -59,18 +61,32 @@ def health() -> dict:
     return {"status": "ok"}
 
 
+@app.post("/auth/signup", response_model=SignupResponse)
+def auth_signup(req: SignupRequest) -> SignupResponse:
+    sign_up(req.email, req.password, req.nickname)
+    return SignupResponse(
+        message="Account created — you can now log in.", nickname=req.nickname)
+
+
+@app.post("/auth/login", response_model=AuthTokens)
+def auth_login(req: LoginRequest) -> AuthTokens:
+    return AuthTokens(**log_in(req.email, req.password))
+
+
 @app.post("/scores", response_model=ScoreResponse)
 def submit_score(submission: ScoreSubmission,
+                 user: dict = Depends(get_current_user),
                  repo: Repository = Depends(get_repository)) -> ScoreResponse:
+    nickname = user["nickname"]
     result = repo.submit_run(
-        nickname=submission.nickname,
+        nickname=nickname,
         score=submission.score,
         kills=submission.kills,
         survival_seconds=submission.survival_seconds,
     )
-    log_game_over(submission, result)
+    log_game_over(nickname, submission, result)
     return ScoreResponse(
-        nickname=submission.nickname,
+        nickname=nickname,
         score=submission.score,
         best_score=result["best_score"],
         games_played=result["games_played"],

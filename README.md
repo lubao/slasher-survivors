@@ -51,10 +51,15 @@ pytest                      # 跑測試
 
 | Method | Path | 說明 |
 |--------|------|------|
-| POST | `/scores` | 送出一局成績,計算成就並記錄 game-over log |
-| GET | `/leaderboard?limit=10` | 全球前 N 名 |
-| GET | `/achievements/{nickname}` | 玩家已解鎖成就 |
+| POST | `/auth/signup` | 註冊帳號(email / password / nickname),自動確認免驗證碼 |
+| POST | `/auth/login` | 登入,回傳 Cognito JWT(id_token)與 nickname |
+| POST | `/scores` | 送出一局成績(**需 `Authorization: Bearer <id_token>`**;nickname 由 token 解出),計算成就並記錄 game-over log |
+| GET | `/leaderboard?limit=10` | 全球前 N 名(公開) |
+| GET | `/achievements/{nickname}` | 玩家已解鎖成就(公開) |
 | GET | `/health` | 健康檢查(ALB 用) |
+
+> 認證採用 **Amazon Cognito**。`/scores` 需登入;後端以 Cognito User Pool 的
+> JWKS 驗證 ID token,並由 token 取出 nickname,因此成績無法被冒名送出。
 
 ## Git Flow 分支規範
 

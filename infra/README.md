@@ -10,13 +10,15 @@ AWS CDK (Python) infrastructure for Slasher Survivors.
 
 ```
 Internet ──HTTPS──> CloudFront ──VPC origin──> internal ALB ──> ECS Fargate ──> DynamoDB
-                    (public)                   (private subnets, not public)
+                    (public)                   (private subnets, not public)        │
+                                                                                    └─> Cognito (signup/login)
 ```
 
 CloudFront is the single public entry point. The ALB is **internal** (private
 subnets) and only accepts traffic from the CloudFront managed prefix list
 `com.amazonaws.global.cloudfront.origin-facing`, reached via a CloudFront
-**VPC origin**.
+**VPC origin**. Auth is handled by a **Cognito User Pool**; the backend proxies
+signup/login and verifies ID tokens on `POST /scores`.
 
 ## Stack: `SlasherSurvivors-UsWest1`
 
@@ -24,13 +26,16 @@ subnets) and only accepts traffic from the CloudFront managed prefix list
 |----------|--------|
 | CloudFront distribution | public HTTPS, redirect-to-HTTPS, `ALLOW_ALL` methods (API needs POST), caching disabled (dynamic), `ALL_VIEWER_EXCEPT_HOST_HEADER` origin request policy |
 | CloudFront VPC origin | targets the internal ALB over HTTP:80 |
+| Cognito User Pool | email sign-in, self sign-up, `nickname` attribute, password policy (≥8, lower+digit), `RemovalPolicy.DESTROY` |
+| Pre-signup Lambda | auto-confirms users + auto-verifies email (no emailed code) |
+| Cognito app client | public (no secret), `USER_PASSWORD_AUTH` + SRP, 8h access/id tokens |
 | DynamoDB table `slasher-survivors` | `PK`/`SK` (String), GSI `GSI1` (`GSI1PK` S / `GSI1SK` N), PAY_PER_REQUEST, PITR on, **RETAIN** on stack delete |
 | VPC | 2 AZs, 1 NAT gateway |
-| ECS Fargate | cluster + service, 1 task, 0.25 vCPU / 512 MB (construct id `Api`) |
+| ECS Fargate | cluster + service, 1 task, 0.25 vCPU / 512 MB (construct id `Api`); env `GAME_TABLE`, `COGNITO_USER_POOL_ID`, `COGNITO_CLIENT_ID`, `COGNITO_REGION` |
 | Container image | built from `../backend/Dockerfile` as a CDK asset |
 | Internal ALB | `scheme: internal`, listener :80 → container :8000, health check `GET /health`; SG ingress only from the CloudFront prefix list |
 | CloudWatch Logs | service log group, 1-week retention, stream prefix `slasher` |
-| IAM | task execution role + task role (least-privilege read/write to the table + indexes) |
+| IAM | task execution role + task role (least-privilege: DynamoDB read/write + `cognito-idp` signup/login on the pool) |
 
 ## Prerequisites
 
@@ -65,6 +70,7 @@ npx cdk deploy --profile game --require-approval never
 - `CloudFrontDomain` — the CloudFront domain name
 - `InternalAlbDnsName` — internal ALB DNS (not publicly reachable; for debugging)
 - `TableName` — `slasher-survivors`
+- `UserPoolId` / `UserPoolClientId` — Cognito identifiers (injected into the task)
 
 Verify after deploy (CloudFront can take 5–15 min to propagate):
 

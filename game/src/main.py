@@ -1,9 +1,14 @@
 """Game entry point: state machine wiring input -> World -> Renderer.
 
 States:
-    MENU      nickname input, shows global leaderboard + your achievements
+    LOGIN     email/password -> Cognito login via backend
+    SIGNUP    nickname/email/password -> account creation (auto-confirmed)
+    MENU      shows global leaderboard + your achievements; ENTER to play
     PLAYING   the horde-survival run
     GAMEOVER  result screen; submits the score once (non-blocking)
+
+Score submission requires login: the nickname comes from the account, and the
+backend derives it from the auth token.
 
 Run with:  python -m src.main
 """
@@ -20,7 +25,10 @@ from .entities import Vec2
 from .renderer import Renderer
 from .world import World
 
-MENU, PLAYING, GAMEOVER = "menu", "playing", "gameover"
+LOGIN, SIGNUP, MENU, PLAYING, GAMEOVER = "login", "signup", "menu", "playing", "gameover"
+
+LOGIN_FIELDS = ["email", "password"]
+SIGNUP_FIELDS = ["nickname", "email", "password"]
 
 
 class GameApp:
@@ -32,15 +40,20 @@ class GameApp:
         self.renderer = Renderer(self.screen)
         self.api = ApiClient()
 
-        self.state = MENU
+        self.state = LOGIN
         self.nickname = ""
         self.world: World | None = None
         self.submitted = False
 
+        # auth form state
+        self.login = {"email": "", "password": ""}
+        self.signup = {"nickname": "", "email": "", "password": ""}
+        self.active = 0
+        self.auth_message = ""
+
         # cached menu data (refreshed in background so the UI never blocks)
         self._leaderboard: list[dict] = []
         self._achievements: list[dict] = []
-        self.refresh_menu_data()
 
     # ------------------------------------------------------------------ #
     def refresh_menu_data(self) -> None:
@@ -70,23 +83,105 @@ class GameApp:
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     return False
-                if self.state == MENU:
+                if self.state == LOGIN:
+                    self._login_key(event)
+                elif self.state == SIGNUP:
+                    self._signup_key(event)
+                elif self.state == MENU:
                     self._menu_key(event)
                 elif self.state == GAMEOVER and event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
                     self.state = MENU
                     self.refresh_menu_data()
         return True
 
+    # ------------------------------------------------------------------ #
+    # Text-field editing helpers
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _edit(fields: dict, name: str, event, *, nickname: bool = False) -> None:
+        if event.key == pygame.K_BACKSPACE:
+            fields[name] = fields[name][:-1]
+        elif event.unicode and event.unicode.isprintable():
+            ch = event.unicode
+            if nickname and not (ch.isalnum() or ch in "_-"):
+                return
+            limit = 16 if nickname else 64
+            if len(fields[name]) < limit:
+                fields[name] += ch
+
+    def _login_key(self, event) -> None:
+        if event.key == pygame.K_F2:
+            self.state = SIGNUP
+            self.active = 0
+            self.auth_message = ""
+            return
+        if event.key == pygame.K_TAB:
+            self.active = (self.active + 1) % len(LOGIN_FIELDS)
+            return
+        if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+            self._do_login()
+            return
+        self._edit(self.login, LOGIN_FIELDS[self.active], event)
+
+    def _signup_key(self, event) -> None:
+        if event.key == pygame.K_F2:
+            self.state = LOGIN
+            self.active = 0
+            self.auth_message = ""
+            return
+        if event.key == pygame.K_TAB:
+            self.active = (self.active + 1) % len(SIGNUP_FIELDS)
+            return
+        if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+            self._do_signup()
+            return
+        name = SIGNUP_FIELDS[self.active]
+        self._edit(self.signup, name, event, nickname=(name == "nickname"))
+
     def _menu_key(self, event) -> None:
         if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
-            if self.nickname.strip():
-                self._start_run()
-        elif event.key == pygame.K_BACKSPACE:
-            self.nickname = self.nickname[:-1]
-        elif event.unicode and event.unicode.isprintable() and len(self.nickname) < 16:
-            ch = event.unicode
-            if ch.isalnum() or ch in "_-":
-                self.nickname += ch
+            self._start_run()
+        elif event.key == pygame.K_F3:  # log out
+            self.api.log_out()
+            self.nickname = ""
+            self._achievements = []
+            self.state = LOGIN
+            self.active = 0
+            self.auth_message = "Logged out."
+
+    # ------------------------------------------------------------------ #
+    def _do_login(self) -> None:
+        email, password = self.login["email"].strip(), self.login["password"]
+        if not email or not password:
+            self.auth_message = "Enter email and password."
+            return
+        self.auth_message = "Logging in…"
+        self._draw(); pygame.display.flip()
+        ok, msg = self.api.log_in(email, password)
+        self.auth_message = msg
+        if ok:
+            self.nickname = self.api.nickname or ""
+            self.login["password"] = ""
+            self.state = MENU
+            self.refresh_menu_data()
+
+    def _do_signup(self) -> None:
+        nickname = self.signup["nickname"].strip()
+        email = self.signup["email"].strip()
+        password = self.signup["password"]
+        if not (nickname and email and password):
+            self.auth_message = "Fill in nickname, email and password."
+            return
+        self.auth_message = "Creating account…"
+        self._draw(); pygame.display.flip()
+        ok, msg = self.api.sign_up(email, password, nickname)
+        self.auth_message = msg
+        if ok:
+            # prefill login with the new email and switch to the login screen
+            self.login["email"] = email
+            self.login["password"] = ""
+            self.state = LOGIN
+            self.active = 1  # focus the password field
 
     # ------------------------------------------------------------------ #
     def _start_run(self) -> None:
@@ -117,7 +212,13 @@ class GameApp:
 
     # ------------------------------------------------------------------ #
     def _draw(self) -> None:
-        if self.state == MENU:
+        if self.state == LOGIN:
+            self.renderer.draw_login(self.login, LOGIN_FIELDS[self.active],
+                                     self.auth_message, self.api.backend_info())
+        elif self.state == SIGNUP:
+            self.renderer.draw_signup(self.signup, SIGNUP_FIELDS[self.active],
+                                      self.auth_message, self.api.backend_info())
+        elif self.state == MENU:
             self.renderer.draw_menu(self.nickname, self._leaderboard,
                                     self._achievements, self.api.backend_info())
         elif self.state == PLAYING:

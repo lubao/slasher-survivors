@@ -13,6 +13,8 @@ from aws_cdk import aws_ecs as ecs
 from aws_cdk import aws_ecs_patterns as ecs_patterns
 from aws_cdk import aws_cloudfront as cloudfront
 from aws_cdk import aws_cloudfront_origins as origins
+from aws_cdk import aws_cognito as cognito
+from aws_cdk import aws_lambda as lambda_
 from aws_cdk import aws_logs as logs
 from constructs import Construct
 
@@ -70,6 +72,59 @@ class SlasherStack(Stack):
         )
 
         # ---------------------------------------------------------------- #
+        # Cognito: user pool + public app client. A pre-signup Lambda
+        # auto-confirms users (and auto-verifies their email) so signups are
+        # immediately usable without an emailed confirmation code.
+        # ---------------------------------------------------------------- #
+        pre_signup_fn = lambda_.Function(
+            self,
+            "PreSignupAutoConfirm",
+            runtime=lambda_.Runtime.PYTHON_3_12,
+            handler="index.handler",
+            timeout=Duration.seconds(10),
+            code=lambda_.Code.from_inline(
+                "def handler(event, context):\n"
+                "    event['response']['autoConfirmUser'] = True\n"
+                "    attrs = event.get('request', {}).get('userAttributes', {})\n"
+                "    if attrs.get('email'):\n"
+                "        event['response']['autoVerifyEmail'] = True\n"
+                "    return event\n"
+            ),
+        )
+
+        user_pool = cognito.UserPool(
+            self,
+            "UserPool",
+            self_sign_up_enabled=True,
+            sign_in_aliases=cognito.SignInAliases(email=True),
+            auto_verify=cognito.AutoVerifiedAttrs(email=True),
+            standard_attributes=cognito.StandardAttributes(
+                email=cognito.StandardAttribute(required=True, mutable=True),
+                nickname=cognito.StandardAttribute(required=False, mutable=True),
+            ),
+            password_policy=cognito.PasswordPolicy(
+                min_length=8,
+                require_lowercase=True,
+                require_digits=True,
+                require_uppercase=False,
+                require_symbols=False,
+            ),
+            account_recovery=cognito.AccountRecovery.EMAIL_ONLY,
+            lambda_triggers=cognito.UserPoolTriggers(pre_sign_up=pre_signup_fn),
+            removal_policy=RemovalPolicy.DESTROY,
+        )
+
+        user_pool_client = user_pool.add_client(
+            "GameClient",
+            generate_secret=False,  # public client (used from the game)
+            auth_flows=cognito.AuthFlow(user_password=True, user_srp=True),
+            prevent_user_existence_errors=True,
+            access_token_validity=Duration.hours(8),
+            id_token_validity=Duration.hours(8),
+            refresh_token_validity=Duration.days(30),
+        )
+
+        # ---------------------------------------------------------------- #
         # Fargate service behind an INTERNAL ALB. The ALB is not internet
         # facing; public access is fronted by CloudFront (VPC origin) below.
         # open_listener=False so the pattern does NOT add a 0.0.0.0/0 rule;
@@ -97,6 +152,9 @@ class SlasherStack(Stack):
                 environment={
                     "GAME_TABLE": table.table_name,
                     "AWS_REGION": self.region,
+                    "COGNITO_USER_POOL_ID": user_pool.user_pool_id,
+                    "COGNITO_CLIENT_ID": user_pool_client.user_pool_client_id,
+                    "COGNITO_REGION": self.region,
                 },
                 log_driver=ecs.LogDrivers.aws_logs(
                     stream_prefix="slasher", log_group=log_group),
@@ -113,6 +171,15 @@ class SlasherStack(Stack):
 
         # Least-privilege: task role gets read/write to the table + its indexes.
         table.grant_read_write_data(service.task_definition.task_role)
+
+        # Backend proxies signup/login to Cognito using the task role.
+        user_pool.grant(
+            service.task_definition.task_role,
+            "cognito-idp:SignUp",
+            "cognito-idp:InitiateAuth",
+            "cognito-idp:ConfirmSignUp",
+            "cognito-idp:ResendConfirmationCode",
+        )
 
         # ---------------------------------------------------------------- #
         # CloudFront distribution in front of the internal ALB via a VPC
@@ -157,3 +224,8 @@ class SlasherStack(Stack):
                   value=service.load_balancer.load_balancer_dns_name,
                   description="Internal ALB DNS (not publicly reachable)")
         CfnOutput(self, "TableName", value=table.table_name)
+        CfnOutput(self, "UserPoolId", value=user_pool.user_pool_id,
+                  description="Cognito User Pool ID")
+        CfnOutput(self, "UserPoolClientId",
+                  value=user_pool_client.user_pool_client_id,
+                  description="Cognito User Pool app client ID")

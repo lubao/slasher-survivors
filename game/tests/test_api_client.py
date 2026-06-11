@@ -17,8 +17,9 @@ def _resp(status=200, json_data=None):
     return m
 
 
-def test_submit_score_posts_expected_payload():
+def test_submit_score_sends_result_and_bearer_token():
     client = ApiClient(base_url="http://test")
+    client.id_token = "id.tok.123"  # simulate a logged-in session
     with patch("src.api_client.requests.post", return_value=_resp(200)) as post:
         results = {}
         t = client.submit_score("alice", {"score": 100, "kills": 9, "survival_seconds": 42},
@@ -27,10 +28,47 @@ def test_submit_score_posts_expected_payload():
 
     post.assert_called_once()
     _, kwargs = post.call_args
-    assert kwargs["json"] == {
-        "nickname": "alice", "score": 100, "kills": 9, "survival_seconds": 42,
-    }
+    # nickname is derived from the token server-side, so it is NOT in the body
+    assert kwargs["json"] == {"score": 100, "kills": 9, "survival_seconds": 42}
+    assert kwargs["headers"]["Authorization"] == "Bearer id.tok.123"
     assert results["ok"] is True
+
+
+def test_sign_up_success_and_error():
+    client = ApiClient(base_url="http://test")
+    with patch("src.api_client.requests.post", return_value=_resp(200)):
+        ok, _ = client.sign_up("a@b.com", "Passw0rd1", "alice")
+    assert ok is True
+
+    err = _resp(409)
+    err.json.return_value = {"detail": "An account with this email already exists"}
+    with patch("src.api_client.requests.post", return_value=err):
+        ok, msg = client.sign_up("a@b.com", "Passw0rd1", "alice")
+    assert ok is False and "already exists" in msg
+
+
+def test_log_in_stores_token_and_nickname():
+    client = ApiClient(base_url="http://test")
+    data = {"id_token": "ID", "access_token": "AC", "nickname": "alice", "expires_in": 3600}
+    with patch("src.api_client.requests.post", return_value=_resp(200, data)):
+        ok, msg = client.log_in("a@b.com", "Passw0rd1")
+    assert ok is True
+    assert client.logged_in is True
+    assert client.id_token == "ID"
+    assert client.nickname == "alice"
+
+    client.log_out()
+    assert client.logged_in is False and client.id_token is None
+
+
+def test_log_in_bad_credentials():
+    client = ApiClient(base_url="http://test")
+    bad = _resp(401)
+    bad.json.return_value = {"detail": "Invalid email or password"}
+    with patch("src.api_client.requests.post", return_value=bad):
+        ok, msg = client.log_in("a@b.com", "nope")
+    assert ok is False and client.logged_in is False
+    assert "Invalid" in msg
 
 
 def test_submit_score_offline_reports_failure_without_raising():
