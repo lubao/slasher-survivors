@@ -77,3 +77,7 @@ pytest                      # 跑測試
 - [ ] Task 5 — 單一 Region 基礎設施(CDK,`us-west-1`)
 - [ ] Task 6 — 多 Region + Global Table + 容災
 - [ ] Task 7 — 收尾與文件
+
+## License
+
+Released under the [MIT License](LICENSE).
