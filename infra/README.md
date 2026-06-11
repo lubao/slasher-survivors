@@ -2,24 +2,35 @@
 
 AWS CDK (Python) infrastructure for Slasher Survivors.
 
-- **Task 5 (done):** single-Region stack in `us-west-1`.
+- **Task 5 (done):** single-Region stack in `us-west-1`, fronted by CloudFront.
 - **Task 6 (planned):** second Region `ap-east-2`, DynamoDB Global Table,
   Route 53 latency routing + health-check failover.
+
+## Architecture
+
+```
+Internet ──HTTPS──> CloudFront ──VPC origin──> internal ALB ──> ECS Fargate ──> DynamoDB
+                    (public)                   (private subnets, not public)
+```
+
+CloudFront is the single public entry point. The ALB is **internal** (private
+subnets) and only accepts traffic from the CloudFront managed prefix list
+`com.amazonaws.global.cloudfront.origin-facing`, reached via a CloudFront
+**VPC origin**.
 
 ## Stack: `SlasherSurvivors-UsWest1`
 
 | Resource | Detail |
 |----------|--------|
+| CloudFront distribution | public HTTPS, redirect-to-HTTPS, `ALLOW_ALL` methods (API needs POST), caching disabled (dynamic), `ALL_VIEWER_EXCEPT_HOST_HEADER` origin request policy |
+| CloudFront VPC origin | targets the internal ALB over HTTP:80 |
 | DynamoDB table `slasher-survivors` | `PK`/`SK` (String), GSI `GSI1` (`GSI1PK` S / `GSI1SK` N), PAY_PER_REQUEST, PITR on, **RETAIN** on stack delete |
 | VPC | 2 AZs, 1 NAT gateway |
-| ECS Fargate | cluster + service, 1 task, 0.25 vCPU / 512 MB |
-| Container image | built from `../backend/Dockerfile` as a CDK asset (pushed to the bootstrap ECR repo) |
-| Application Load Balancer | public, listener :80 → container :8000, target-group health check `GET /health` (expects `200`) |
+| ECS Fargate | cluster + service, 1 task, 0.25 vCPU / 512 MB (construct id `Api`) |
+| Container image | built from `../backend/Dockerfile` as a CDK asset |
+| Internal ALB | `scheme: internal`, listener :80 → container :8000, health check `GET /health`; SG ingress only from the CloudFront prefix list |
 | CloudWatch Logs | service log group, 1-week retention, stream prefix `slasher` |
 | IAM | task execution role + task role (least-privilege read/write to the table + indexes) |
-
-The task role grants DynamoDB access scoped to the table and its indexes; the
-container reads `GAME_TABLE` and `AWS_REGION` from its environment.
 
 ## Prerequisites
 
@@ -30,6 +41,8 @@ container reads `GAME_TABLE` and `AWS_REGION` from its environment.
 
 > The stack account is pinned to `253988640130` in `app.py`, so a deploy with
 > the wrong profile fails fast. Always pass `--profile game`.
+>
+> CloudFront VPC origins require `aws-cdk-lib >= 2.258`.
 
 ## Usage
 
@@ -48,15 +61,26 @@ npx cdk deploy --profile game --require-approval never
 
 ### Outputs
 
-- `AlbDnsName` / `ServiceURL` — public ALB endpoint for the API
+- `CloudFrontUrl` — public HTTPS endpoint (set the game's `BACKEND_URL` to this)
+- `CloudFrontDomain` — the CloudFront domain name
+- `InternalAlbDnsName` — internal ALB DNS (not publicly reachable; for debugging)
 - `TableName` — `slasher-survivors`
 
-Verify after deploy:
+Verify after deploy (CloudFront can take 5–15 min to propagate):
 
 ```bash
-curl http://<AlbDnsName>/health        # {"status":"ok"}
-curl http://<AlbDnsName>/leaderboard
+curl https://<CloudFrontDomain>/health        # {"status":"ok"}
+curl https://<CloudFrontDomain>/leaderboard
 ```
+
+## Migration note (public ALB → internal + CloudFront)
+
+Switching an existing internet-facing ALB to `internal` forces an ALB
+replacement, and the ECS pattern's single target group cannot briefly attach to
+two ALBs. To avoid that conflict the load-balanced service uses the construct id
+`Api` (not `Service`), so CloudFormation provisions a fresh ALB + target group +
+listener + service and retires the old set in one deploy — with no DynamoDB
+impact.
 
 ## Teardown
 
@@ -69,6 +93,6 @@ The DynamoDB table has `RemovalPolicy.RETAIN`, so it (and its data) **survives**
 
 ## Notes / cost
 
-While running, the stack incurs ongoing cost (NAT gateway, ALB, Fargate task,
-per-request DynamoDB). Destroy it when not in use. The ALB exposes the API
-publicly and unauthenticated, matching the game's public-API design.
+While running, the stack incurs ongoing cost (CloudFront requests + data
+transfer, NAT gateway, ALB, Fargate task, per-request DynamoDB). Destroy it when
+not in use. CloudFront is the only public surface; the ALB is private.
