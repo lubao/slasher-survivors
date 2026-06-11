@@ -5,10 +5,34 @@ from pydantic import BaseModel, Field
 
 
 class ScoreSubmission(BaseModel):
-    nickname: str = Field(min_length=1, max_length=16, pattern=r"^[A-Za-z0-9_-]+$")
+    # nickname is derived from the authenticated token, not the client.
     score: int = Field(ge=0)
     kills: int = Field(ge=0)
     survival_seconds: int = Field(ge=0)
+
+
+class SignupRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=128)
+    password: str = Field(min_length=8, max_length=256)
+    nickname: str = Field(min_length=1, max_length=16, pattern=r"^[A-Za-z0-9_-]+$")
+
+
+class SignupResponse(BaseModel):
+    message: str
+    nickname: str
+
+
+class LoginRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=128)
+    password: str = Field(min_length=1, max_length=256)
+
+
+class AuthTokens(BaseModel):
+    id_token: str
+    access_token: str
+    refresh_token: str | None = None
+    expires_in: int
+    nickname: str
 
 
 class Achievement(BaseModel):

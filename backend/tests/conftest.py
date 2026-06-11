@@ -30,9 +30,32 @@ def repo():
 
 @pytest.fixture
 def client(repo):
+    from fastapi import Header
+    from fastapi.testclient import TestClient
+
+    from app.auth import get_current_user
+    from app.main import app, get_repository
+
+    app.dependency_overrides[get_repository] = lambda: repo
+
+    # Stand in for Cognito: derive the player from an X-Test-Nickname header
+    # (defaults to "tester") so tests don't need real tokens.
+    def fake_user(x_test_nickname: str = Header(default="tester")):
+        return {"sub": f"sub-{x_test_nickname}", "nickname": x_test_nickname,
+                "email": f"{x_test_nickname}@example.com"}
+
+    app.dependency_overrides[get_current_user] = fake_user
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def unauth_client(repo):
+    """Client with NO auth override — exercises the real Bearer dependency."""
     from fastapi.testclient import TestClient
 
     from app.main import app, get_repository
+
     app.dependency_overrides[get_repository] = lambda: repo
     yield TestClient(app)
     app.dependency_overrides.clear()

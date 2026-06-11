@@ -61,21 +61,77 @@ class Renderer:
         self._text(self.font, f"Time  {world.survival_seconds}s", C.COLOR_TEXT, (16, 88))
 
     # ------------------------------------------------------------------ #
+    def _draw_form(self, title: str, fields: dict, order: list[str],
+                   active: str, message: str, hint: str,
+                   backend: dict | None) -> None:
+        self.screen.fill(C.COLOR_BG)
+        cx = C.SCREEN_WIDTH // 2
+        self._text(self.big, C.TITLE, C.COLOR_PLAYER, (cx, 70), center=True)
+        self._text(self.font, title, C.COLOR_TEXT, (cx, 135), center=True)
+
+        labels = {"email": "Email", "password": "Password", "nickname": "Nickname"}
+        y = 185
+        for name in order:
+            self._text(self.small, labels.get(name, name).upper(),
+                       (170, 170, 170), (cx - 160, y - 18))
+            box = pygame.Rect(cx - 160, y, 320, 36)
+            pygame.draw.rect(self.screen, (40, 40, 55), box, border_radius=6)
+            is_active = (name == active)
+            pygame.draw.rect(self.screen,
+                             C.COLOR_PLAYER if is_active else (90, 90, 110),
+                             box, width=2, border_radius=6)
+            shown = ("*" * len(fields[name])) if name == "password" else fields[name]
+            caret = "_" if is_active and (pygame.time.get_ticks() // 500) % 2 == 0 else ""
+            self._text(self.font, f"{shown}{caret}", C.COLOR_TEXT,
+                       (box.x + 10, box.centery), center=False)
+            y += 70
+
+        if message:
+            self._text(self.small, message, C.COLOR_BULLET, (cx, y + 4), center=True)
+
+        self._text(self.small, "TAB: next field · ENTER: submit", (170, 170, 170),
+                   (cx, C.SCREEN_HEIGHT - 74), center=True)
+        self._text(self.small, hint, (170, 170, 170),
+                   (cx, C.SCREEN_HEIGHT - 52), center=True)
+        self._text(self.small, "ESC to quit", (120, 120, 120),
+                   (cx, C.SCREEN_HEIGHT - 30), center=True)
+        self._draw_backend_line(backend)
+
+    def draw_login(self, fields: dict, active: str, message: str,
+                   backend: dict | None = None) -> None:
+        self._draw_form("Log in", fields, ["email", "password"], active, message,
+                        "F2: create a new account", backend)
+
+    def draw_signup(self, fields: dict, active: str, message: str,
+                    backend: dict | None = None) -> None:
+        self._draw_form("Sign up", fields, ["nickname", "email", "password"],
+                        active, message, "F2: back to log in", backend)
+
+    def _draw_backend_line(self, backend: dict | None) -> None:
+        if backend is None:
+            return
+        cx = C.SCREEN_WIDTH // 2
+        host = backend.get("url", "").split("://")[-1] or "?"
+        if backend.get("online") and backend.get("rtt_ms") is not None:
+            info = f"Backend: {host}  ·  online  ·  {backend['rtt_ms']:.0f} ms RTT"
+            color = C.COLOR_HP_FRONT
+        else:
+            info = f"Backend: {host}  ·  offline"
+            color = C.COLOR_ENEMY
+        self._text(self.small, info, color, (cx, 18), center=True)
+
+    # ------------------------------------------------------------------ #
     def draw_menu(self, nickname: str, leaderboard: list[dict],
                   achievements: list[dict], backend: dict | None = None) -> None:
         self.screen.fill(C.COLOR_BG)
         cx = C.SCREEN_WIDTH // 2
         self._text(self.big, C.TITLE, C.COLOR_PLAYER, (cx, 70), center=True)
-        self._text(self.font, "Enter your nickname, then press ENTER to play",
-                   C.COLOR_TEXT, (cx, 130), center=True)
-
-        # nickname box
-        box = pygame.Rect(cx - 160, 160, 320, 40)
-        pygame.draw.rect(self.screen, (40, 40, 55), box, border_radius=6)
-        pygame.draw.rect(self.screen, C.COLOR_PLAYER, box, width=2, border_radius=6)
-        caret = "_" if (pygame.time.get_ticks() // 500) % 2 == 0 else " "
-        self._text(self.font, f"{nickname}{caret}", C.COLOR_TEXT,
-                   (box.centerx, box.centery), center=True)
+        self._text(self.font, f"Logged in as {nickname}", C.COLOR_HP_FRONT,
+                   (cx, 130), center=True)
+        self._text(self.font, "Press ENTER to play", C.COLOR_TEXT,
+                   (cx, 165), center=True)
+        self._text(self.small, "F3 to log out", (170, 170, 170),
+                   (cx, 195), center=True)
 
         # leaderboard
         self._text(self.font, "— Global Leaderboard —", C.COLOR_BULLET, (120, 250))

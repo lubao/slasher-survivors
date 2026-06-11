@@ -19,3 +19,11 @@ DDB_ENDPOINT = os.environ.get("DDB_ENDPOINT") or None
 # GSI used for the global leaderboard query.
 LEADERBOARD_INDEX = "GSI1"
 LEADERBOARD_PK_VALUE = "LEADERBOARD"
+
+# ------------------------------------------------------------------ #
+# Cognito (auth). Injected by the CDK stack into the Fargate task.
+# ------------------------------------------------------------------ #
+COGNITO_USER_POOL_ID = os.environ.get("COGNITO_USER_POOL_ID")
+COGNITO_CLIENT_ID = os.environ.get("COGNITO_CLIENT_ID")
+# Region the user pool lives in (defaults to the task's Region).
+COGNITO_REGION = os.environ.get("COGNITO_REGION") or AWS_REGION
