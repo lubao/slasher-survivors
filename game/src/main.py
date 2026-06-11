@@ -118,7 +118,8 @@ class GameApp:
     # ------------------------------------------------------------------ #
     def _draw(self) -> None:
         if self.state == MENU:
-            self.renderer.draw_menu(self.nickname, self._leaderboard, self._achievements)
+            self.renderer.draw_menu(self.nickname, self._leaderboard,
+                                    self._achievements, self.api.backend_info())
         elif self.state == PLAYING:
             self.renderer.draw_world(self.world)
         elif self.state == GAMEOVER:

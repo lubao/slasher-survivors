@@ -59,6 +59,27 @@ def test_get_leaderboard_offline_returns_empty():
         assert client.get_leaderboard() == []
 
 
+def test_leaderboard_tracks_rtt_and_online_status():
+    client = ApiClient(base_url="http://test")
+    # before any call: unknown / offline
+    assert client.last_rtt_ms is None and client.online is False
+
+    data = {"entries": [{"nickname": "a", "score": 50}]}
+    with patch("src.api_client.requests.get", return_value=_resp(200, data)):
+        client.get_leaderboard()
+    assert client.online is True
+    assert isinstance(client.last_rtt_ms, float) and client.last_rtt_ms >= 0.0
+    assert client.backend_info() == {
+        "url": "http://test", "online": True, "rtt_ms": client.last_rtt_ms,
+    }
+
+    # a later failure resets telemetry to offline / unknown RTT
+    with patch("src.api_client.requests.get",
+               side_effect=requests.ConnectionError("offline")):
+        client.get_leaderboard()
+    assert client.online is False and client.last_rtt_ms is None
+
+
 def test_get_achievements_parses_and_is_offline_safe():
     client = ApiClient(base_url="http://test")
     data = {"achievements": [{"id": "first_blood", "name": "First Blood"}]}

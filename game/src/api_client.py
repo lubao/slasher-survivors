@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 from typing import Callable, Optional
 
 import requests
@@ -24,6 +25,13 @@ class ApiClient:
     def __init__(self, base_url: Optional[str] = None, timeout: float = DEFAULT_TIMEOUT):
         self.base_url = (base_url or os.environ.get("BACKEND_URL", "http://localhost:8000")).rstrip("/")
         self.timeout = timeout
+        # Backend connectivity telemetry, updated by get_leaderboard().
+        self.last_rtt_ms: Optional[float] = None  # round-trip time, ms
+        self.online: bool = False
+
+    def backend_info(self) -> dict:
+        """Snapshot of backend connectivity for the UI."""
+        return {"url": self.base_url, "online": self.online, "rtt_ms": self.last_rtt_ms}
 
     # ------------------------------------------------------------------ #
     # Writes
@@ -55,12 +63,18 @@ class ApiClient:
     # Reads
     # ------------------------------------------------------------------ #
     def get_leaderboard(self, limit: int = 10) -> list[dict]:
+        start = time.perf_counter()
         try:
             resp = requests.get(f"{self.base_url}/leaderboard",
                                 params={"limit": limit}, timeout=self.timeout)
             resp.raise_for_status()
-            return resp.json().get("entries", [])
+            entries = resp.json().get("entries", [])
+            self.last_rtt_ms = (time.perf_counter() - start) * 1000.0
+            self.online = True
+            return entries
         except (requests.RequestException, ValueError):
+            self.last_rtt_ms = None
+            self.online = False
             return []
 
     def get_achievements(self, nickname: str) -> list[dict]:

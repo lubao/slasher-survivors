@@ -62,7 +62,7 @@ class Renderer:
 
     # ------------------------------------------------------------------ #
     def draw_menu(self, nickname: str, leaderboard: list[dict],
-                  achievements: list[dict]) -> None:
+                  achievements: list[dict], backend: dict | None = None) -> None:
         self.screen.fill(C.COLOR_BG)
         cx = C.SCREEN_WIDTH // 2
         self._text(self.big, C.TITLE, C.COLOR_PLAYER, (cx, 70), center=True)
@@ -93,6 +93,18 @@ class Renderer:
         for i, ach in enumerate(achievements[:10]):
             self._text(self.small, f"\u2605 {ach.get('name', ach.get('id', '?'))}",
                        C.COLOR_HP_FRONT, (560, 280 + i * 22))
+
+        # backend connectivity + round-trip time
+        if backend is not None:
+            host = backend.get("url", "").split("://")[-1] or "?"
+            if backend.get("online") and backend.get("rtt_ms") is not None:
+                info = f"Backend: {host}  ·  online  ·  {backend['rtt_ms']:.0f} ms RTT"
+                color = C.COLOR_HP_FRONT
+            else:
+                info = f"Backend: {host}  ·  offline"
+                color = C.COLOR_ENEMY
+            self._text(self.small, info, color,
+                       (cx, C.SCREEN_HEIGHT - 52), center=True)
 
         self._text(self.small, "WASD / Arrows to move · auto-attack · ESC to quit",
                    (170, 170, 170), (cx, C.SCREEN_HEIGHT - 30), center=True)
