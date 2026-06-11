@@ -11,6 +11,8 @@ from aws_cdk import aws_dynamodb as dynamodb
 from aws_cdk import aws_ec2 as ec2
 from aws_cdk import aws_ecs as ecs
 from aws_cdk import aws_ecs_patterns as ecs_patterns
+from aws_cdk import aws_cloudfront as cloudfront
+from aws_cdk import aws_cloudfront_origins as origins
 from aws_cdk import aws_logs as logs
 from constructs import Construct
 
@@ -68,18 +70,27 @@ class SlasherStack(Stack):
         )
 
         # ---------------------------------------------------------------- #
-        # Fargate service behind a public ALB. CDK builds the backend image
-        # from the Dockerfile as an asset and pushes it to the bootstrap ECR
-        # repository, so no manual docker push/ordering is required.
+        # Fargate service behind an INTERNAL ALB. The ALB is not internet
+        # facing; public access is fronted by CloudFront (VPC origin) below.
+        # open_listener=False so the pattern does NOT add a 0.0.0.0/0 rule;
+        # we scope ingress to the CloudFront managed prefix list instead.
+        # CDK builds the backend image from the Dockerfile as an asset.
+        #
+        # NOTE: construct id is "Api" (not "Service"). Migrating an existing
+        # public ALB to internal forces an ALB replacement, and the pattern's
+        # single target group cannot briefly attach to two ALBs. A distinct
+        # construct id provisions a fresh ALB+TG+listener+service and retires
+        # the old set cleanly, with no DynamoDB impact.
         # ---------------------------------------------------------------- #
         service = ecs_patterns.ApplicationLoadBalancedFargateService(
             self,
-            "Service",
+            "Api",
             cluster=cluster,
             cpu=256,
             memory_limit_mib=512,
             desired_count=1,
-            public_load_balancer=True,
+            public_load_balancer=False,
+            open_listener=False,
             task_image_options=ecs_patterns.ApplicationLoadBalancedTaskImageOptions(
                 image=ecs.ContainerImage.from_asset("../backend"),
                 container_port=CONTAINER_PORT,
@@ -103,7 +114,46 @@ class SlasherStack(Stack):
         # Least-privilege: task role gets read/write to the table + its indexes.
         table.grant_read_write_data(service.task_definition.task_role)
 
-        CfnOutput(self, "AlbDnsName",
+        # ---------------------------------------------------------------- #
+        # CloudFront distribution in front of the internal ALB via a VPC
+        # origin. CloudFront becomes the single public entry point; the ALB
+        # stays private. The ALB security group only accepts traffic from the
+        # CloudFront origin-facing managed prefix list.
+        # ---------------------------------------------------------------- #
+        cf_origin_facing = ec2.PrefixList.from_lookup(
+            self, "CloudFrontOriginFacing",
+            prefix_list_name="com.amazonaws.global.cloudfront.origin-facing",
+        )
+        service.load_balancer.connections.allow_from(
+            cf_origin_facing, ec2.Port.tcp(80),
+            "Allow CloudFront VPC origin to reach the internal ALB",
+        )
+
+        distribution = cloudfront.Distribution(
+            self,
+            "Cdn",
+            comment="Slasher Survivors API (CloudFront -> internal ALB via VPC origin)",
+            default_behavior=cloudfront.BehaviorOptions(
+                origin=origins.VpcOrigin.with_application_load_balancer(
+                    service.load_balancer,
+                    protocol_policy=cloudfront.OriginProtocolPolicy.HTTP_ONLY,
+                    http_port=80,
+                ),
+                viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+                allowed_methods=cloudfront.AllowedMethods.ALLOW_ALL,
+                # Dynamic API: never cache, and forward viewer query strings /
+                # headers (minus Host) to the origin.
+                cache_policy=cloudfront.CachePolicy.CACHING_DISABLED,
+                origin_request_policy=cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+            ),
+        )
+
+        CfnOutput(self, "CloudFrontUrl",
+                  value=f"https://{distribution.distribution_domain_name}",
+                  description="Public HTTPS endpoint (set the game's BACKEND_URL to this)")
+        CfnOutput(self, "CloudFrontDomain",
+                  value=distribution.distribution_domain_name)
+        CfnOutput(self, "InternalAlbDnsName",
                   value=service.load_balancer.load_balancer_dns_name,
-                  description="Public ALB DNS name for the backend API")
+                  description="Internal ALB DNS (not publicly reachable)")
         CfnOutput(self, "TableName", value=table.table_name)
