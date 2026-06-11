@@ -40,6 +40,9 @@ backend/.dynamodb/
 # Logs
 *.log
 
+# Brazil / nested workspace metadata
+.workspace/
+
 # OS / editor
 .DS_Store
 Thumbs.db
