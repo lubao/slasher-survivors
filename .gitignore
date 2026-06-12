@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.python-version
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+.tox/
+
+# Env / secrets
+.env
+.env.*
+*.local
+*.pem
+
+# CDK / Node
+infra/node_modules/
+infra/cdk.out/
+infra/.cdk.staging/
+cdk.out/
+cdk.context.json
+node_modules/
+*.tsbuildinfo
+
+# DynamoDB Local
+backend/.dynamodb/
+*.db
+
+# Logs
+*.log
+
+# Brazil / nested workspace metadata
+.workspace/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

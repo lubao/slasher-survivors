@@ -1,0 +1,9 @@
+# Keep the Fargate image small & builds fast (used by CDK asset build)
+.venv/
+**/__pycache__/
+**/*.pyc
+.pytest_cache/
+tests/
+docker-compose.yml
+requirements-dev.txt
+pytest.ini
