@@ -42,17 +42,30 @@ def _issuer() -> str:
 # Cognito operations
 # ---------------------------------------------------------------------- #
 def sign_up(email: str, password: str, nickname: str) -> None:
-    """Register a new user. With the pre-signup trigger the user is
-    auto-confirmed, so login works immediately afterwards."""
+    """Register a new user via the privileged admin API.
+
+    Self-registration is disabled on the pool, so only this backend (holding
+    the cognito-idp:AdminCreateUser / AdminSetUserPassword permissions) can
+    create accounts. ``MessageAction=SUPPRESS`` skips Cognito's invite email,
+    and setting a permanent password confirms the user so login works
+    immediately afterwards.
+    """
     try:
-        _cognito().sign_up(
-            ClientId=config.COGNITO_CLIENT_ID,
+        _cognito().admin_create_user(
+            UserPoolId=config.COGNITO_USER_POOL_ID,
             Username=email,
-            Password=password,
+            MessageAction="SUPPRESS",
             UserAttributes=[
                 {"Name": "email", "Value": email},
+                {"Name": "email_verified", "Value": "true"},
                 {"Name": "nickname", "Value": nickname},
             ],
+        )
+        _cognito().admin_set_user_password(
+            UserPoolId=config.COGNITO_USER_POOL_ID,
+            Username=email,
+            Password=password,
+            Permanent=True,
         )
     except ClientError as err:
         code = err.response["Error"]["Code"]
@@ -68,9 +81,10 @@ def sign_up(email: str, password: str, nickname: str) -> None:
 def log_in(email: str, password: str) -> dict:
     """Authenticate and return tokens + the player's nickname."""
     try:
-        resp = _cognito().initiate_auth(
+        resp = _cognito().admin_initiate_auth(
+            UserPoolId=config.COGNITO_USER_POOL_ID,
             ClientId=config.COGNITO_CLIENT_ID,
-            AuthFlow="USER_PASSWORD_AUTH",
+            AuthFlow="ADMIN_USER_PASSWORD_AUTH",
             AuthParameters={"USERNAME": email, "PASSWORD": password},
         )
     except ClientError as err:

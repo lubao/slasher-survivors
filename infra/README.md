@@ -17,8 +17,9 @@ Internet ──HTTPS──> CloudFront ──VPC origin──> internal ALB ─�
 CloudFront is the single public entry point. The ALB is **internal** (private
 subnets) and only accepts traffic from the CloudFront managed prefix list
 `com.amazonaws.global.cloudfront.origin-facing`, reached via a CloudFront
-**VPC origin**. Auth is handled by a **Cognito User Pool**; the backend proxies
-signup/login and verifies ID tokens on `POST /scores`.
+**VPC origin**. Auth is handled by a **Cognito User Pool** with self-registration
+disabled; the backend mediates signup/login server-side via the Cognito Admin
+APIs (using its task role) and verifies ID tokens on `POST /scores`.
 
 ## Stack: `SlasherSurvivors-UsWest1`
 
@@ -26,9 +27,8 @@ signup/login and verifies ID tokens on `POST /scores`.
 |----------|--------|
 | CloudFront distribution | public HTTPS, redirect-to-HTTPS, `ALLOW_ALL` methods (API needs POST), caching disabled (dynamic), `ALL_VIEWER_EXCEPT_HOST_HEADER` origin request policy |
 | CloudFront VPC origin | targets the internal ALB over HTTP:80 |
-| Cognito User Pool | email sign-in, self sign-up, `nickname` attribute, password policy (≥8, lower+digit), `RemovalPolicy.DESTROY` |
-| Pre-signup Lambda | auto-confirms users + auto-verifies email (no emailed code) |
-| Cognito app client | public (no secret), `USER_PASSWORD_AUTH` + SRP, 8h access/id tokens |
+| Cognito User Pool | email sign-in, **self sign-up disabled** (admin-create only), `nickname` attribute, password policy (≥8, lower+digit), `RemovalPolicy.DESTROY` |
+| Cognito app client | no secret, `ADMIN_USER_PASSWORD_AUTH` only (server-side), 8h access/id tokens |
 | DynamoDB table `slasher-survivors` | `PK`/`SK` (String), GSI `GSI1` (`GSI1PK` S / `GSI1SK` N), PAY_PER_REQUEST, PITR on, **RETAIN** on stack delete |
 | VPC | 2 AZs, 1 NAT gateway |
 | ECS Fargate | cluster + service, 1 task, 0.25 vCPU / 512 MB (construct id `Api`); env `GAME_TABLE`, `COGNITO_USER_POOL_ID`, `COGNITO_CLIENT_ID`, `COGNITO_REGION` |

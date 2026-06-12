@@ -14,7 +14,6 @@ from aws_cdk import aws_ecs_patterns as ecs_patterns
 from aws_cdk import aws_cloudfront as cloudfront
 from aws_cdk import aws_cloudfront_origins as origins
 from aws_cdk import aws_cognito as cognito
-from aws_cdk import aws_lambda as lambda_
 from aws_cdk import aws_logs as logs
 from constructs import Construct
 
@@ -72,30 +71,17 @@ class SlasherStack(Stack):
         )
 
         # ---------------------------------------------------------------- #
-        # Cognito: user pool + public app client. A pre-signup Lambda
-        # auto-confirms users (and auto-verifies their email) so signups are
-        # immediately usable without an emailed confirmation code.
+        # Cognito: user pool + app client. Self-registration is DISABLED:
+        # players never call Cognito directly — the backend (running with the
+        # Fargate task role) is the only principal allowed to create users,
+        # via the privileged Admin* APIs. This removes the public,
+        # unauthenticated SignUp surface (AppSec: "Self-Registration Enabled")
+        # while keeping the player-facing /auth/signup endpoint working.
         # ---------------------------------------------------------------- #
-        pre_signup_fn = lambda_.Function(
-            self,
-            "PreSignupAutoConfirm",
-            runtime=lambda_.Runtime.PYTHON_3_12,
-            handler="index.handler",
-            timeout=Duration.seconds(10),
-            code=lambda_.Code.from_inline(
-                "def handler(event, context):\n"
-                "    event['response']['autoConfirmUser'] = True\n"
-                "    attrs = event.get('request', {}).get('userAttributes', {})\n"
-                "    if attrs.get('email'):\n"
-                "        event['response']['autoVerifyEmail'] = True\n"
-                "    return event\n"
-            ),
-        )
-
         user_pool = cognito.UserPool(
             self,
             "UserPool",
-            self_sign_up_enabled=True,
+            self_sign_up_enabled=False,
             sign_in_aliases=cognito.SignInAliases(email=True),
             auto_verify=cognito.AutoVerifiedAttrs(email=True),
             standard_attributes=cognito.StandardAttributes(
@@ -110,14 +96,16 @@ class SlasherStack(Stack):
                 require_symbols=False,
             ),
             account_recovery=cognito.AccountRecovery.EMAIL_ONLY,
-            lambda_triggers=cognito.UserPoolTriggers(pre_sign_up=pre_signup_fn),
             removal_policy=RemovalPolicy.DESTROY,
         )
 
         user_pool_client = user_pool.add_client(
             "GameClient",
-            generate_secret=False,  # public client (used from the game)
-            auth_flows=cognito.AuthFlow(user_password=True, user_srp=True),
+            generate_secret=False,  # backend-only client (server-side admin auth)
+            # Admin auth flow only: the backend authenticates on the player's
+            # behalf with the task role. No client-side USER_PASSWORD/SRP flow
+            # is exposed.
+            auth_flows=cognito.AuthFlow(admin_user_password=True),
             prevent_user_existence_errors=True,
             access_token_validity=Duration.hours(8),
             id_token_validity=Duration.hours(8),
@@ -172,13 +160,14 @@ class SlasherStack(Stack):
         # Least-privilege: task role gets read/write to the table + its indexes.
         table.grant_read_write_data(service.task_definition.task_role)
 
-        # Backend proxies signup/login to Cognito using the task role.
+        # Backend mediates signup/login to Cognito using the task role. With
+        # self-registration disabled, user creation/auth goes through the
+        # privileged Admin* APIs (callable only with these IAM permissions).
         user_pool.grant(
             service.task_definition.task_role,
-            "cognito-idp:SignUp",
-            "cognito-idp:InitiateAuth",
-            "cognito-idp:ConfirmSignUp",
-            "cognito-idp:ResendConfirmationCode",
+            "cognito-idp:AdminCreateUser",
+            "cognito-idp:AdminSetUserPassword",
+            "cognito-idp:AdminInitiateAuth",
         )
 
         # ---------------------------------------------------------------- #
